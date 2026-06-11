@@ -1,0 +1,11 @@
+.DS_Store
+AGENTS.md
+.codex_home_refactor_prompt.md
+.build/
+DerivedData/
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+.env
+.env.*
