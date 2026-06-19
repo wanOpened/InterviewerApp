@@ -26,6 +26,7 @@ final class InterviewSession {
         case leaving
         case disconnected
     }
+    enum RoomMode: Equatable { case interview, observe }
     enum RoomPhase: Equatable { case connecting, inRoom, leaving }
     enum RoomSpeaker: Equatable { case interviewer, candidate }
 
@@ -34,6 +35,7 @@ final class InterviewSession {
     private(set) var connected = false
     private(set) var isPaused = false
     private(set) var connectionStatus: ConnectionStatus = .idle
+    private(set) var roomMode: RoomMode = .interview
     private(set) var roomPhase: RoomPhase = .connecting
     private(set) var roomSpeaker: RoomSpeaker = .interviewer
     private(set) var liveCaptionText = ""
@@ -47,7 +49,7 @@ final class InterviewSession {
     private(set) var totalQuestions = 0
 
     var canEnterRoom: Bool {
-        phase == .live && connected && microphonePermissionGranted
+        phase == .live && connected && (roomMode == .observe || microphonePermissionGranted)
     }
 
     var interviewerReady: Bool {
@@ -162,7 +164,7 @@ final class InterviewSession {
             isPaused = false
             try await api.ensureUser()
             sessionId = id
-            try await waitForReady(id, maxAttempts: 1)
+            try await waitForReady(id)
             try await connectReadySession(id)
         } catch let e as APIError {
             connectionStatus = .disconnected
@@ -188,6 +190,8 @@ final class InterviewSession {
     private func connectReadySession(_ id: String) async throws {
         connectionStatus = .requestingToken
         let join = try await api.join(sessionId: id)
+        let tokenPolicy = LiveKitJoinTokenPolicy(token: join.livekit_token)
+        roomMode = tokenPolicy.isObserveInterview ? .observe : .interview
         connectionStatus = .joiningRoom
 
         store = nil
@@ -235,7 +239,11 @@ final class InterviewSession {
         )
         liveStartedAt = Date()
         connected = true
-        refreshMicrophonePermission()
+        if roomMode == .interview {
+            refreshMicrophonePermission()
+        } else {
+            clearMicrophonePermissionState()
+        }
         connectionStatus = .connected
         isPaused = false
         phase = .live
@@ -310,7 +318,7 @@ final class InterviewSession {
     }
 
     func pause() async {
-        guard phase == .live, connected, !isPaused else { return }
+        guard roomMode == .interview, phase == .live, connected, !isPaused else { return }
         do {
             try await liveKit.setMicrophone(enabled: false)
             isPaused = true
@@ -320,7 +328,7 @@ final class InterviewSession {
     }
 
     func resume() async {
-        guard phase == .live, connected, isPaused else { return }
+        guard roomMode == .interview, phase == .live, connected, isPaused else { return }
         do {
             try await liveKit.setMicrophone(enabled: true)
             isPaused = false
@@ -455,6 +463,7 @@ final class InterviewSession {
 
     private func prepareRoomState() {
         connectionStatus = .idle
+        roomMode = .interview
         roomPhase = .connecting
         roomSpeaker = .interviewer
         participantStatuses = [:]

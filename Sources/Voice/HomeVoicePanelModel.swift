@@ -80,10 +80,19 @@ enum HomeCompanionMood: CaseIterable, Equatable {
     }
 }
 
+private enum HomeVoiceLifecyclePhase {
+    case idle
+    case preparing
+    case prepared
+    case active
+}
+
 @MainActor
 @Observable
 final class HomeVoicePanelModel {
     private static let connectionErrorMessage = "语音连接暂时不可用，请稍后再试。"
+    private static let activationRetryIntervalNanoseconds: UInt64 = 250_000_000
+    private static let activationRetryAttempts = 32
 
     private(set) var isInlineInteractionActive = false
     private(set) var state: HomeVoicePanelState = .idle
@@ -97,23 +106,28 @@ final class HomeVoicePanelModel {
     private let liveKitURL: String
     private var onNavigateInterview: (String) -> Void
     private var onOpenEditor: (HomeVoiceEditorRoute) -> Void
+    private var onOpenScheduleList: () -> Void
     private var lifecycleGeneration = 0
+    private var lifecyclePhase: HomeVoiceLifecyclePhase = .idle
     private var agentSpeaking = false
     private var localSpeaking = false
     private var toolActive = false
+    private var activationRetryTask: Task<Void, Never>?
 
     init(
         api: APIClienting,
         liveKit: LiveKitControlling,
         liveKitURL: String,
         onNavigateInterview: @escaping (String) -> Void = { _ in },
-        onOpenEditor: @escaping (HomeVoiceEditorRoute) -> Void = { _ in }
+        onOpenEditor: @escaping (HomeVoiceEditorRoute) -> Void = { _ in },
+        onOpenScheduleList: @escaping () -> Void = {}
     ) {
         self.api = api
         self.liveKit = liveKit
         self.liveKitURL = liveKitURL
         self.onNavigateInterview = onNavigateInterview
         self.onOpenEditor = onOpenEditor
+        self.onOpenScheduleList = onOpenScheduleList
     }
 
     var currentContext: AgentHomeRead? {
@@ -157,6 +171,10 @@ final class HomeVoicePanelModel {
         onOpenEditor = handler
     }
 
+    func setOpenScheduleListHandler(_ handler: @escaping () -> Void) {
+        onOpenScheduleList = handler
+    }
+
     func startInlineAgent() async {
         await start()
     }
@@ -173,9 +191,84 @@ final class HomeVoicePanelModel {
         await closeInlineInteraction()
     }
 
-    func start() async {
-        guard state == .idle else { return }
+    @discardableResult
+    func prepare() async -> Bool {
+        switch lifecyclePhase {
+        case .prepared, .active:
+            return true
+        case .preparing:
+            while lifecyclePhase == .preparing {
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
+            return lifecyclePhase == .prepared || lifecyclePhase == .active
+        case .idle:
+            break
+        }
+
         let generation = nextLifecycleGeneration()
+        lifecyclePhase = .preparing
+        errorMessage = nil
+
+        do {
+            try await api.ensureUser()
+            guard isCurrentLifecycle(generation) else { return false }
+            let joined = try await api.joinHomeVoice()
+            guard isCurrentLifecycle(generation) else { return false }
+            join = joined
+            try await liveKit.connectHomeVoice(
+                url: liveKitURL,
+                token: joined.livekit_token,
+                onSessionEvent: { [weak self] event in
+                    Task { @MainActor in
+                        guard let self, self.isCurrentLifecycle(generation) else { return }
+                        self.apply(event)
+                    }
+                },
+                onNavigateInterview: { [weak self] payload in
+                    Task { @MainActor in
+                        guard let self, self.isCurrentLifecycle(generation) else { return }
+                        await self.handleNavigateInterview(payload)
+                    }
+                },
+                onNavigateHomeAction: { [weak self] payload in
+                    Task { @MainActor in
+                        guard let self, self.isCurrentLifecycle(generation) else { return }
+                        await self.handleNavigateHomeAction(payload)
+                    }
+                },
+                onState: { [weak self] connected in
+                    Task { @MainActor in
+                        guard let self, self.isCurrentLifecycle(generation) else { return }
+                        self.apply(connected ? .connected : .disconnected)
+                    }
+                },
+                onAudioRecoveryFailed: { [weak self] _ in
+                    Task { @MainActor in
+                        guard let self, self.isCurrentLifecycle(generation) else { return }
+                        await self.failAndReset()
+                    }
+                }
+            )
+            guard isCurrentLifecycle(generation) else {
+                await cleanupStaleConnection()
+                return false
+            }
+            if lifecyclePhase == .preparing {
+                lifecyclePhase = .prepared
+            }
+            return true
+        } catch {
+            guard isCurrentLifecycle(generation) else { return false }
+            resetToIdle(clearJoin: true)
+            isInlineInteractionActive = false
+            return false
+        }
+    }
+
+    func activate() async {
+        if lifecyclePhase == .active {
+            return
+        }
         isInlineInteractionActive = true
         state = .connecting
         errorMessage = nil
@@ -185,57 +278,29 @@ final class HomeVoicePanelModel {
         localSpeaking = false
         toolActive = false
 
+        guard await prepare() else {
+            await failAndReset()
+            return
+        }
+
         do {
-            try await api.ensureUser()
-            guard isCurrentStart(generation) else { return }
-            let joined = try await api.joinHomeVoice()
-            guard isCurrentStart(generation) else { return }
-            join = joined
-            try await liveKit.connectHomeVoice(
-                url: liveKitURL,
-                token: joined.livekit_token,
-                onSessionEvent: { [weak self] event in
-                    Task { @MainActor in
-                        guard let self, self.isCurrentStart(generation) else { return }
-                        self.apply(event)
-                    }
-                },
-                onNavigateInterview: { [weak self] payload in
-                    Task { @MainActor in
-                        guard let self, self.isCurrentStart(generation) else { return }
-                        await self.handleNavigateInterview(payload)
-                    }
-                },
-                onNavigateHomeAction: { [weak self] payload in
-                    Task { @MainActor in
-                        guard let self, self.isCurrentStart(generation) else { return }
-                        await self.handleNavigateHomeAction(payload)
-                    }
-                },
-                onState: { [weak self] connected in
-                    Task { @MainActor in
-                        guard let self, self.isCurrentStart(generation) else { return }
-                        self.apply(connected ? .connected : .disconnected)
-                    }
-                },
-                onAudioRecoveryFailed: { [weak self] _ in
-                    Task { @MainActor in
-                        guard let self, self.isCurrentStart(generation) else { return }
-                        await self.failAndReset()
-                    }
-                }
-            )
-            guard isCurrentStart(generation) else {
-                await cleanupStaleConnection()
-                return
-            }
-            if state == .connecting {
-                apply(.connected)
-            }
+            let activationGeneration = lifecycleGeneration
+            try await liveKit.activateHomeVoice()
+            try await liveKit.setMicrophone(enabled: true)
+            lifecyclePhase = .active
+            agentSpeaking = true
+            localSpeaking = false
+            toolActive = false
+            state = .speaking
+            startActivationRetryLoop(generation: activationGeneration)
         } catch {
-            guard isCurrentStart(generation) else { return }
+            cancelActivationRetry()
             await failAndReset()
         }
+    }
+
+    func start() async {
+        await activate()
     }
 
     func stop() async {
@@ -247,6 +312,14 @@ final class HomeVoicePanelModel {
         errorMessage = nil
         switch event {
         case .connected:
+            if lifecyclePhase == .preparing || (lifecyclePhase == .prepared && !isInlineInteractionActive) {
+                lifecyclePhase = .prepared
+                if !isInlineInteractionActive {
+                    state = .idle
+                }
+                return
+            }
+            lifecyclePhase = .active
             agentSpeaking = true
             localSpeaking = false
             toolActive = false
@@ -254,18 +327,25 @@ final class HomeVoicePanelModel {
         case .disconnected:
             resetToIdle(clearJoin: true)
         case .agentSpeakingChanged(let isSpeaking):
+            guard !shouldIgnorePassiveRoomEvent else { return }
+            if isSpeaking {
+                cancelActivationRetry()
+            }
             agentSpeaking = isSpeaking
             recomputeStateAfterActivityChange(defaultWhenQuiet: .listening)
         case .localSpeakingChanged(let isSpeaking):
+            guard !shouldIgnorePassiveRoomEvent else { return }
             localSpeaking = isSpeaking
             recomputeStateAfterActivityChange(defaultWhenQuiet: agentSpeaking ? .speaking : .listening)
         case .toolActivityChanged(let isActive):
+            guard !shouldIgnorePassiveRoomEvent else { return }
             toolActive = isActive
             if isActive {
                 localSpeaking = false
             }
             recomputeStateAfterActivityChange(defaultWhenQuiet: .speaking)
         case .transcript(let text, _, let speaker):
+            guard !shouldIgnorePassiveRoomEvent else { return }
             switch speaker {
             case .user:
                 transcript = text
@@ -274,6 +354,7 @@ final class HomeVoicePanelModel {
                     state = .listening
                 }
             case .agent:
+                cancelActivationRetry()
                 assistantMessage = text
                 agentSpeaking = true
                 localSpeaking = false
@@ -282,6 +363,10 @@ final class HomeVoicePanelModel {
                 }
             }
         }
+    }
+
+    private var shouldIgnorePassiveRoomEvent: Bool {
+        !isInlineInteractionActive && (lifecyclePhase == .preparing || lifecyclePhase == .prepared)
     }
 
     private func recomputeStateAfterActivityChange(defaultWhenQuiet: HomeVoicePanelState) {
@@ -325,8 +410,10 @@ final class HomeVoicePanelModel {
                         positionId: decoded.payload.positionId
                     )
                 )
+            case "create_schedule", "update_schedule", "cancel_schedule":
+                onOpenScheduleList()
             default:
-                throw TransportError(message: "unsupported home voice action")
+                return
             }
             lifecycleGeneration += 1
             await teardownSession()
@@ -343,13 +430,45 @@ final class HomeVoicePanelModel {
     }
 
     private func teardownSession() async {
+        cancelActivationRetry()
         try? await liveKit.setMicrophone(enabled: false)
         await liveKit.disconnect()
         resetToIdle(clearJoin: true)
         isInlineInteractionActive = false
     }
 
+    private func startActivationRetryLoop(generation: Int) {
+        activationRetryTask?.cancel()
+        activationRetryTask = Task { [weak self] in
+            for _ in 0..<Self.activationRetryAttempts {
+                try? await Task.sleep(nanoseconds: Self.activationRetryIntervalNanoseconds)
+                guard !Task.isCancelled else { return }
+                guard let self else { return }
+                let shouldContinue = await self.retryActivationIfCurrent(generation)
+                if !shouldContinue {
+                    return
+                }
+            }
+        }
+    }
+
+    private func retryActivationIfCurrent(_ generation: Int) async -> Bool {
+        guard isCurrentLifecycle(generation),
+              isInlineInteractionActive,
+              lifecyclePhase == .active else {
+            return false
+        }
+        try? await liveKit.activateHomeVoice()
+        return true
+    }
+
+    private func cancelActivationRetry() {
+        activationRetryTask?.cancel()
+        activationRetryTask = nil
+    }
+
     private func resetToIdle(clearJoin: Bool) {
+        lifecyclePhase = .idle
         state = .idle
         agentSpeaking = false
         localSpeaking = false
@@ -364,8 +483,8 @@ final class HomeVoicePanelModel {
         return lifecycleGeneration
     }
 
-    private func isCurrentStart(_ generation: Int) -> Bool {
-        lifecycleGeneration == generation && isInlineInteractionActive
+    private func isCurrentLifecycle(_ generation: Int) -> Bool {
+        lifecycleGeneration == generation
     }
 
     private func cleanupStaleConnection() async {

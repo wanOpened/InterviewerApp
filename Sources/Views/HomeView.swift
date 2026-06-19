@@ -10,10 +10,11 @@ struct HomeView: View {
     @State private var isShowingScheduleList = false
     @State private var voiceEditorRoute: HomeVoiceEditorRoute?
     @Environment(\.scenePhase) private var scenePhase
+    private let tokenProvider: TokenProviding?
 
-    init() {
+    init(tokenProvider: TokenProviding? = nil) {
         let loadedConfig = AppConfig.load()
-        let api = Self.makeAPI(loadedConfig)
+        let api = Self.makeAPI(loadedConfig, tokenProvider: tokenProvider)
         let agentModel = AgentHomeModel(api: api)
         let homeVoicePanel = HomeVoicePanelModel(
             api: api,
@@ -21,6 +22,7 @@ struct HomeView: View {
             liveKitURL: loadedConfig.livekitURL
         )
         let schedulePeekModel = HomeSchedulePeekModel(api: api)
+        self.tokenProvider = tokenProvider
         _config = State(initialValue: loadedConfig)
         _agentModel = State(initialValue: agentModel)
         _homeVoicePanel = State(initialValue: homeVoicePanel)
@@ -49,7 +51,7 @@ struct HomeView: View {
 
             if isShowingScheduleList {
                 ScheduleListView(
-                    api: Self.makeAPI(config),
+                    api: Self.makeAPI(config, tokenProvider: tokenProvider),
                     onClose: { isShowingScheduleList = false },
                     startInterview: { scheduleId in
                         isShowingScheduleList = false
@@ -63,7 +65,7 @@ struct HomeView: View {
             if let voiceEditorRoute {
                 HomeVoiceEditorSheetHost(
                     route: voiceEditorRoute,
-                    api: Self.makeAPI(config),
+                    api: Self.makeAPI(config, tokenProvider: tokenProvider),
                     dismiss: { self.voiceEditorRoute = nil },
                     saved: {
                         self.voiceEditorRoute = nil
@@ -77,6 +79,7 @@ struct HomeView: View {
         }
         .task {
             bindHomeVoiceNavigation()
+            Task { await homeVoicePanel.prepare() }
             await agentModel.refresh()
             await schedulePeekModel.refresh()
         }
@@ -134,13 +137,16 @@ struct HomeView: View {
         homeVoicePanel.setOpenEditorHandler { route in
             voiceEditorRoute = route
         }
+        homeVoicePanel.setOpenScheduleListHandler {
+            isShowingScheduleList = true
+        }
     }
 
     private func handleAvatarTap() {
         Task {
             if homeVoicePanel.state == .idle {
                 schedulePeekModel.captureCreationSnapshot()
-                await homeVoicePanel.start()
+                await homeVoicePanel.activate()
             } else {
                 await homeVoicePanel.stop()
             }
@@ -161,7 +167,7 @@ struct HomeView: View {
                 if homeVoicePanel.state == .idle {
                     schedulePeekModel.captureCreationSnapshot()
                 }
-                await homeVoicePanel.start()
+                await homeVoicePanel.activate()
             }
         }
     }
@@ -203,15 +209,19 @@ struct HomeView: View {
     private func makeSession(title: String) -> InterviewSession {
         let s = InterviewSession(
             config: config,
-            api: Self.makeAPI(config),
+            api: Self.makeAPI(config, tokenProvider: tokenProvider),
             liveKit: LiveKitController()
         )
         s.entryTitle = title
         return s
     }
 
-    private static func makeAPI(_ config: AppConfig) -> APIClient {
-        APIClient(baseURL: config.apiBaseURL, userExternalId: config.devUserExternalId)
+    private static func makeAPI(_ config: AppConfig, tokenProvider: TokenProviding?) -> APIClient {
+        APIClient(
+            baseURL: config.apiBaseURL,
+            userExternalId: config.devUserExternalId,
+            tokenProvider: tokenProvider
+        )
     }
 }
 

@@ -6,8 +6,7 @@ final class HomeInlineInteractionUITests: XCTestCase {
     }
 
     func testHomeLaunchesWithQinglanTapTarget() throws {
-        let app = XCUIApplication()
-        app.launch()
+        let app = makeLoggedInApp()
 
         XCTAssertTrue(app.buttons["home-qinglan-avatar-button"].waitForExistence(timeout: 8))
         XCTAssertFalse(app.staticTexts["顺手处理"].exists)
@@ -17,10 +16,16 @@ final class HomeInlineInteractionUITests: XCTestCase {
     }
 
     func testHomeDoesNotShowScheduleEntryButtonOrTabBar() throws {
-        let app = XCUIApplication()
-        app.launch()
+        let app = makeLoggedInApp()
 
         XCTAssertFalse(app.buttons["home-schedule-entry-button"].waitForExistence(timeout: 2))
         XCTAssertFalse(app.tabBars.firstMatch.exists)
+    }
+
+    private func makeLoggedInApp() -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments.append("-UITestLoggedIn")
+        app.launch()
+        return app
     }
 }

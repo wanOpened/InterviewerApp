@@ -114,6 +114,7 @@ final class HomeVoicePanelModelTests: XCTestCase {
     final class FakeLiveKit: LiveKitControlling {
         private(set) var connectCalls: [(url: String, token: String)] = []
         private(set) var microphoneStates: [Bool] = []
+        private(set) var activateHomeVoiceCalls = 0
         private(set) var disconnectCount = 0
         private var onSessionEvent: ((HomeVoiceSessionEvent) -> Void)?
         private var onNavigateInterview: ((Data) -> Void)?
@@ -145,12 +146,15 @@ final class HomeVoicePanelModelTests: XCTestCase {
             onAudioRecoveryFailed: @escaping (String) -> Void
         ) async throws {
             connectCalls.append((url, token))
-            microphoneStates.append(true)
             self.onSessionEvent = onSessionEvent
             self.onNavigateInterview = onNavigateInterview
             self.onNavigateHomeAction = onNavigateHomeAction
             self.onAudioRecoveryFailed = onAudioRecoveryFailed
             onState(true)
+        }
+
+        func activateHomeVoice() async throws {
+            activateHomeVoiceCalls += 1
         }
 
         func setMicrophone(enabled: Bool) async throws {
@@ -192,11 +196,79 @@ final class HomeVoicePanelModelTests: XCTestCase {
         XCTAssertEqual(api.joinHomeVoiceCalls, 1)
         XCTAssertEqual(liveKit.connectCalls.first?.url, "ws://localhost:7880")
         XCTAssertEqual(liveKit.connectCalls.first?.token, "home-token")
+        XCTAssertEqual(liveKit.activateHomeVoiceCalls, 1)
         XCTAssertEqual(liveKit.microphoneStates, [true])
         XCTAssertEqual(model.state, .speaking)
         XCTAssertEqual(model.qinglanState, .speaking)
         XCTAssertEqual(model.join?.livekit_room, "home-voice-home-session-1")
         XCTAssertEqual(model.currentContext?.primary_action.type, "create_schedule")
+    }
+
+    func test_prepareJoinsHomeVoiceRoomWithoutOpeningInlineInteractionOrMicrophone() async {
+        let api = FakeAPI()
+        let liveKit = FakeLiveKit()
+        let model = HomeVoicePanelModel(
+            api: api,
+            liveKit: liveKit,
+            liveKitURL: "ws://localhost:7880"
+        )
+
+        await model.prepare()
+
+        XCTAssertEqual(api.joinHomeVoiceCalls, 1)
+        XCTAssertEqual(liveKit.connectCalls.first?.token, "home-token")
+        XCTAssertEqual(liveKit.activateHomeVoiceCalls, 0)
+        XCTAssertEqual(liveKit.microphoneStates, [])
+        XCTAssertFalse(model.isInlineInteractionActive)
+        XCTAssertEqual(model.state, .idle)
+        XCTAssertEqual(model.qinglanState, .idle)
+        XCTAssertEqual(model.currentContext?.primary_action.type, "create_schedule")
+
+        model.apply(.connected)
+        XCTAssertEqual(model.state, .idle)
+        XCTAssertEqual(model.qinglanState, .idle)
+    }
+
+    func test_activatePreparedHomeVoiceSendsActivationAndEnablesMicrophone() async {
+        let api = FakeAPI()
+        let liveKit = FakeLiveKit()
+        let model = HomeVoicePanelModel(
+            api: api,
+            liveKit: liveKit,
+            liveKitURL: "ws://localhost:7880"
+        )
+
+        await model.prepare()
+        await model.activate()
+
+        XCTAssertEqual(api.joinHomeVoiceCalls, 1)
+        XCTAssertEqual(liveKit.connectCalls.count, 1)
+        XCTAssertEqual(liveKit.activateHomeVoiceCalls, 1)
+        XCTAssertEqual(liveKit.microphoneStates, [true])
+        XCTAssertTrue(model.isInlineInteractionActive)
+        XCTAssertEqual(model.state, .speaking)
+    }
+
+    func test_activateRetriesActivationPacketAfterInitialTap() async {
+        let api = FakeAPI()
+        let liveKit = FakeLiveKit()
+        let model = HomeVoicePanelModel(
+            api: api,
+            liveKit: liveKit,
+            liveKitURL: "ws://localhost:7880"
+        )
+
+        await model.prepare()
+        await model.activate()
+        XCTAssertEqual(liveKit.activateHomeVoiceCalls, 1)
+        XCTAssertEqual(liveKit.microphoneStates, [true])
+
+        try? await Task.sleep(nanoseconds: 650_000_000)
+
+        XCTAssertGreaterThanOrEqual(liveKit.activateHomeVoiceCalls, 3)
+        XCTAssertEqual(liveKit.microphoneStates, [true])
+
+        await model.stop()
     }
 
     func test_sessionEventsDriveFiveStatesAndUserSpeechInterruptsSpeaking() {
@@ -340,6 +412,49 @@ final class HomeVoicePanelModelTests: XCTestCase {
         XCTAssertEqual(liveKit.disconnectCount, 1)
         XCTAssertEqual(model.state, .idle)
         XCTAssertNil(model.join)
+    }
+
+    func test_navigateScheduleActionOpensScheduleListAndTearsDownHomeVoiceSession() async {
+        let liveKit = FakeLiveKit()
+        var scheduleListOpens = 0
+        let model = HomeVoicePanelModel(
+            api: FakeAPI(),
+            liveKit: liveKit,
+            liveKitURL: "ws://localhost:7880",
+            onOpenScheduleList: { scheduleListOpens += 1 }
+        )
+        await model.start()
+
+        liveKit.emitNavigateHomeAction(
+            Data(#"{"type":"create_schedule","route":"schedule","payload":{"schedule_id":"sch-9"}}"#.utf8)
+        )
+        await Task.yield()
+        try? await Task.sleep(nanoseconds: 20_000_000)
+
+        XCTAssertEqual(scheduleListOpens, 1)
+        XCTAssertEqual(liveKit.microphoneStates, [true, false])
+        XCTAssertEqual(liveKit.disconnectCount, 1)
+        XCTAssertEqual(model.state, .idle)
+        XCTAssertNil(model.join)
+    }
+
+    func test_navigateUnknownHomeActionIsIgnoredWithoutFakeConnectionError() async {
+        let liveKit = FakeLiveKit()
+        let model = HomeVoicePanelModel(
+            api: FakeAPI(),
+            liveKit: liveKit,
+            liveKitURL: "ws://localhost:7880"
+        )
+        await model.start()
+
+        liveKit.emitNavigateHomeAction(
+            Data(#"{"type":"mystery","route":"nowhere","payload":{}}"#.utf8)
+        )
+        await Task.yield()
+        try? await Task.sleep(nanoseconds: 20_000_000)
+
+        XCTAssertNil(model.errorMessage)
+        XCTAssertEqual(liveKit.disconnectCount, 0)
     }
 
     func test_stopTearsDownRoomAndResetsToIdleWithoutClientWireEvents() async {

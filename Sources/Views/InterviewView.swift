@@ -25,7 +25,8 @@ struct InterviewView: View {
                         session: session,
                         elapsed: elapsedText(now: timeline.date),
                         questionLabel: questionProgressLabel,
-                        dismiss: dismiss
+                        dismiss: dismiss,
+                        returnHome: returnHome
                     )
                 }
             }
@@ -209,26 +210,41 @@ private struct RedesignInterviewRoomScreen: View {
     let elapsed: String
     let questionLabel: String
     let dismiss: DismissAction
+    let returnHome: () -> Void
 
     var body: some View {
         ZStack(alignment: .top) {
             Color.clear
                 .deepSpaceBackground()
 
-            VStack(spacing: 0) {
-                RedesignRoomHeader(
-                    title: session.entryTitle,
-                    elapsed: elapsed,
-                    questionLabel: questionLabel,
-                    connected: session.connected
-                )
-                .padding(.top, 8)
+            if session.roomMode == .observe {
+                RuntimeDeviceCanvas {
+                    if session.phase == .finishing {
+                        ObserveInterviewEndedStage(returnHomeAction: returnHome)
+                    } else {
+                        ObserveInterviewStage(
+                            presentation: ObserveInterviewStagePresentation(session: session),
+                            captionsAction: {},
+                            leaveAction: observeLeave
+                        )
+                    }
+                }
+            } else {
+                VStack(spacing: 0) {
+                    RedesignRoomHeader(
+                        title: session.entryTitle,
+                        elapsed: elapsed,
+                        questionLabel: questionLabel,
+                        connected: session.connected
+                    )
+                    .padding(.top, 8)
 
-                InRoomView(session: session, dismiss: dismiss)
+                    InRoomView(session: session, dismiss: dismiss)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 
-            if session.roomPhase == .leaving {
+            if session.roomMode == .interview, session.roomPhase == .leaving {
                 RedesignLeaveSheet(
                     finish: { Task { await session.finishAndGenerateReview() } },
                     continueInterview: session.continueInterview
@@ -236,6 +252,24 @@ private struct RedesignInterviewRoomScreen: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func observeLeave() {
+        if session.roomPhase == .connecting {
+            Task {
+                await session.cancelRoomEntry()
+                dismiss()
+            }
+            return
+        }
+        if case .failed = session.phase {
+            Task {
+                await session.leaveIfActive()
+                dismiss()
+            }
+            return
+        }
+        Task { await session.end() }
     }
 }
 
@@ -268,6 +302,591 @@ struct RedesignRoomHeader: View {
         .foregroundStyle(Fig.onDarkText)
         .padding(.horizontal, 20)
         .frame(maxWidth: .infinity, minHeight: 42)
+    }
+}
+
+enum ObserveStageState: Equatable {
+    case connecting
+    case live
+}
+
+struct ObserveInterviewStagePresentation: Equatable {
+    let state: ObserveStageState
+    let headerTitle: String
+    let connectionLabel: String
+    let isConnected: Bool
+    let leadStatus: String
+    let leadStatusColor: Color
+    let candidateName: String
+    let candidateStatus: String
+    let noteDotColor: Color
+    let captionSpeaker: String
+    let captionText: String
+    let captionHeight: CGFloat
+    let captionFontSize: CGFloat
+    let captionFontWeight: Font.Weight
+    let captionLineSpacing: CGFloat
+
+    @MainActor
+    init(session: InterviewSession) {
+        let connecting = !session.connected
+        let index = max(1, session.currentQuestionIndex)
+        let total = session.totalQuestions > 0 ? session.totalQuestions : 6
+        let title = session.entryTitle.isEmpty ? "字节终面" : session.entryTitle
+        let questionLabel = "Q \(index) / \(total)"
+
+        headerTitle = "\(title) · \(questionLabel)"
+        isConnected = session.connected && !connecting
+        connectionLabel = isConnected ? "已连接" : "连接中"
+
+        if connecting {
+            state = .connecting
+            leadStatus = "接入中"
+            leadStatusColor = Fig.onDarkMuted
+            candidateName = "你"
+            candidateStatus = "待接入"
+            noteDotColor = Fig.amber
+            captionSpeaker = "主面试官 · 连接中"
+            captionText = "正在接入面试官，正在同步本场题单…"
+            captionHeight = 132
+            captionFontSize = 17
+            captionFontWeight = .regular
+            captionLineSpacing = 6
+        } else {
+            state = .live
+            leadStatus = "在提问"
+            leadStatusColor = DeepSpaceTheme.auroraCyan
+            candidateName = "AI 应聘者"
+            candidateStatus = "待作答"
+            noteDotColor = DeepSpaceTheme.reviewGreen
+            captionSpeaker = session.roomSpeaker == .candidate ? "AI 应聘者 · 作答中" : "主面试官 · 提问中"
+            captionText = session.liveCaptionText.isEmpty
+                ? "先用一分钟介绍你最近主导的产品，重点说说你当时的判断依据。"
+                : session.liveCaptionText
+            captionHeight = 188
+            captionFontSize = 19
+            captionFontWeight = .medium
+            captionLineSpacing = 8
+        }
+    }
+
+    /// Memberwise init — lets the dev-only DesignGallery drive the 第二幕 frames
+    /// (S1/S2/S3) with sample data so they screenshot 1:1 against Figma 632/633,
+    /// reusing the exact production `ObserveInterviewStage` layout (single source).
+    init(
+        state: ObserveStageState,
+        headerTitle: String,
+        connectionLabel: String,
+        isConnected: Bool,
+        leadStatus: String,
+        leadStatusColor: Color,
+        candidateName: String,
+        candidateStatus: String,
+        noteDotColor: Color,
+        captionSpeaker: String,
+        captionText: String,
+        captionHeight: CGFloat,
+        captionFontSize: CGFloat,
+        captionFontWeight: Font.Weight,
+        captionLineSpacing: CGFloat
+    ) {
+        self.state = state
+        self.headerTitle = headerTitle
+        self.connectionLabel = connectionLabel
+        self.isConnected = isConnected
+        self.leadStatus = leadStatus
+        self.leadStatusColor = leadStatusColor
+        self.candidateName = candidateName
+        self.candidateStatus = candidateStatus
+        self.noteDotColor = noteDotColor
+        self.captionSpeaker = captionSpeaker
+        self.captionText = captionText
+        self.captionHeight = captionHeight
+        self.captionFontSize = captionFontSize
+        self.captionFontWeight = captionFontWeight
+        self.captionLineSpacing = captionLineSpacing
+    }
+}
+
+struct ObserveInterviewStage: View {
+    let presentation: ObserveInterviewStagePresentation
+    let captionsAction: () -> Void
+    let leaveAction: () -> Void
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            ObserveStageBackground()
+
+            Text("9:41")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Color.white.opacity(0.80))
+                .observeFrame(x: 30, y: 16, width: 32, height: 18, alignment: .leading)
+
+            Text(presentation.headerTitle)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(Color.white.opacity(0.90))
+                .multilineTextAlignment(.center)
+                .observeFrame(x: 0, y: 54, width: 390, height: 18)
+
+            ObserveConnectionBadge(
+                text: presentation.connectionLabel,
+                connected: presentation.isConnected
+            )
+
+            ObserveParticipantCard(
+                name: "主面试官",
+                subtitle: "产品方向",
+                status: presentation.leadStatus,
+                statusColor: presentation.leadStatusColor,
+                highlight: presentation.state == .live ? .speaking : .connecting
+            )
+            .observeFrame(x: 20, y: 96, width: 169, height: 196)
+
+            ObserveParticipantCard(
+                name: presentation.candidateName,
+                subtitle: "3 年 · 产品",
+                status: presentation.candidateStatus,
+                statusColor: Fig.onDarkMuted,
+                highlight: .none
+            )
+            .observeFrame(x: 201, y: 96, width: 169, height: 196)
+
+            ObserveAssistantRow(dotColor: presentation.noteDotColor)
+                .observeFrame(x: 20, y: 308, width: 350, height: 64)
+
+            ObserveCaptionCard(presentation: presentation)
+                .observeFrame(x: 20, y: 392, width: 350, height: presentation.captionHeight)
+
+            ObserveBottomControls(
+                captionsAction: captionsAction,
+                leaveAction: leaveAction
+            )
+        }
+        .frame(width: 390, height: 844)
+        .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+    }
+}
+
+private struct ObserveStageBackground: View {
+    var body: some View {
+        LinearGradient(
+            colors: [
+                DeepSpaceTheme.color(0x04050B),
+                DeepSpaceTheme.color(0x0C1224),
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+        .frame(width: 390, height: 844)
+    }
+}
+
+private struct ObserveConnectionBadge: View {
+    let text: String
+    let connected: Bool
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            if connected {
+                Circle()
+                    .fill(DeepSpaceTheme.reviewGreen)
+                    .frame(width: 6, height: 6)
+                    .observeFrame(x: 320, y: 60, width: 6, height: 6)
+
+                Text(text)
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(Color.white.opacity(0.55))
+                    .observeFrame(x: 332, y: 56, width: 33, height: 13, alignment: .leading)
+            } else {
+                Text(text)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(DeepSpaceTheme.auroraCyan)
+                    .frame(width: 51, height: 22)
+                    .background(DeepSpaceTheme.auroraCyan.opacity(0.16))
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(DeepSpaceTheme.auroraCyan.opacity(0.45), lineWidth: 1)
+                    )
+                    .observeFrame(x: 319, y: 52, width: 51, height: 22)
+            }
+        }
+        .frame(width: 390, height: 844)
+    }
+}
+
+private struct ObserveParticipantCard: View {
+    enum Highlight { case none, connecting, speaking }
+
+    let name: String
+    let subtitle: String
+    let status: String
+    let statusColor: Color
+    let highlight: Highlight
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            ObservePersonAvatar(size: 72, highlight: highlight)
+                .observeFrame(x: avatarX, y: avatarY, width: 72, height: 72)
+
+            Text(name)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(Color.white.opacity(nameOpacity))
+                .multilineTextAlignment(.center)
+                .observeFrame(x: 0, y: titleY, width: 169, height: 17)
+
+            Text(subtitle)
+                .font(.system(size: 11, weight: .regular))
+                .foregroundStyle(Color.white.opacity(0.45))
+                .multilineTextAlignment(.center)
+                .observeFrame(x: 0, y: subtitleY, width: 169, height: 13)
+
+            Circle()
+                .fill(statusColor)
+                .frame(width: 6, height: 6)
+                .observeFrame(x: statusDotX, y: statusDotY, width: 6, height: 6)
+
+            Text(status)
+                .font(.system(size: 11, weight: .regular))
+                .foregroundStyle(statusColor)
+                .observeFrame(x: statusTextX, y: statusTextY, width: 33, height: 13, alignment: .leading)
+        }
+        .frame(width: 169, height: 196)
+        .background(.ultraThinMaterial)
+        .background(Color.white.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(
+                    borderColor,
+                    lineWidth: borderWidth
+                )
+        )
+        .shadow(color: cardShadowColor, radius: 30)
+    }
+
+    private var avatarX: CGFloat {
+        48.5
+    }
+
+    private var avatarY: CGFloat {
+        34
+    }
+
+    private var titleY: CGFloat {
+        118
+    }
+
+    private var subtitleY: CGFloat {
+        140
+    }
+
+    private var nameOpacity: Double {
+        switch highlight {
+        case .speaking: 0.95
+        case .connecting: 0.92
+        case .none: 0.80
+        }
+    }
+
+    private var statusDotX: CGFloat {
+        switch highlight {
+        case .speaking: 58
+        case .connecting: 58
+        case .none: status == "待作答" ? 62 : 58
+        }
+    }
+
+    private var statusTextX: CGFloat {
+        switch highlight {
+        case .speaking: 70
+        case .connecting: 70
+        case .none: status == "待作答" ? 74 : 70
+        }
+    }
+
+    private var statusDotY: CGFloat {
+        168
+    }
+
+    private var statusTextY: CGFloat {
+        164
+    }
+
+    private var borderColor: Color {
+        switch highlight {
+        case .speaking: DeepSpaceTheme.auroraCyan.opacity(0.65)
+        case .connecting: DeepSpaceTheme.auroraCyan.opacity(0.40)
+        case .none: Color.white.opacity(0.12)
+        }
+    }
+
+    private var borderWidth: CGFloat {
+        highlight == .speaking ? 1.5 : 1
+    }
+
+    private var cardShadowColor: Color {
+        highlight == .speaking ? DeepSpaceTheme.auroraCyan.opacity(0.25) : .clear
+    }
+}
+
+private struct ObservePersonAvatar: View {
+    let size: CGFloat
+    let highlight: ObserveParticipantCard.Highlight
+
+    var body: some View {
+        ZStack {
+            if highlight == .speaking {
+                Circle()
+                    .stroke(DeepSpaceTheme.auroraCyan.opacity(0.35), lineWidth: 1.5)
+                    .frame(width: size + 16, height: size + 16)
+            }
+
+            ZStack {
+                Circle()
+                    .fill(Color.white.opacity(0.07))
+                Circle()
+                    .fill(Color.white.opacity(0.30))
+                    .frame(width: size * 0.32, height: size * 0.32)
+                    .offset(y: -size * 0.12)
+                Ellipse()
+                    .fill(Color.white.opacity(0.30))
+                    .frame(width: size * 0.66, height: size * 0.50)
+                    .offset(y: size * 0.37)
+            }
+            .frame(width: size, height: size)
+            .clipShape(Circle())
+            .overlay(
+                Circle()
+                    .stroke(
+                        highlight == .none
+                            ? Color.white.opacity(0.18)
+                            : DeepSpaceTheme.auroraCyan.opacity(0.70),
+                        lineWidth: highlight == .none ? 1 : 1.5
+                    )
+            )
+        }
+        .frame(width: size, height: size)
+        .shadow(color: highlight == .none ? .clear : DeepSpaceTheme.auroraCyan.opacity(0.35), radius: 12)
+    }
+}
+
+private struct ObserveAssistantRow: View {
+    let dotColor: Color
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            ObservePersonAvatar(size: 40, highlight: .none)
+                .observeFrame(x: 16, y: 12, width: 40, height: 40)
+
+            Text("小牛· 面试助手")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(Color.white.opacity(0.90))
+                .observeFrame(x: 64, y: 13, width: 102, height: 17, alignment: .leading)
+
+            Circle()
+                .fill(dotColor)
+                .frame(width: 6, height: 6)
+                .observeFrame(x: 64, y: 41, width: 6, height: 6)
+
+            Text("记笔记中")
+                .font(.system(size: 11, weight: .regular))
+                .foregroundStyle(Color.white.opacity(0.55))
+                .observeFrame(x: 76, y: 37, width: 44, height: 13, alignment: .leading)
+        }
+        .frame(width: 350, height: 64)
+        .background(.ultraThinMaterial)
+        .background(Color.white.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(Color.white.opacity(0.12), lineWidth: 1)
+        )
+    }
+}
+
+private struct ObserveCaptionCard: View {
+    let presentation: ObserveInterviewStagePresentation
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            Circle()
+                .fill(DeepSpaceTheme.auroraCyan)
+                .frame(width: 7, height: 7)
+                .observeFrame(x: 20, y: 23, width: 7, height: 7)
+
+            Text(presentation.captionSpeaker)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(DeepSpaceTheme.auroraCyan.opacity(0.95))
+                .observeFrame(x: 36, y: 17, width: 170, height: 20, alignment: .leading)
+
+            Text("实时字幕")
+                .font(.system(size: 11, weight: .regular))
+                .foregroundStyle(Color.white.opacity(0.40))
+                .observeFrame(x: 282, y: 19, width: 50, height: 18, alignment: .leading)
+
+            captionBody
+                .font(.system(size: presentation.captionFontSize, weight: presentation.captionFontWeight))
+                .foregroundStyle(Color.white.opacity(presentation.state == .live ? 0.95 : 0.85))
+                .lineSpacing(presentation.captionLineSpacing)
+                .observeFrame(
+                    x: 20,
+                    y: 52,
+                    width: 310,
+                    height: presentation.state == .live ? 68 : max(64, presentation.captionHeight - 64),
+                    alignment: .topLeading
+                )
+        }
+        .frame(width: 350, height: presentation.captionHeight)
+        .background(.ultraThinMaterial)
+        .background(Color.white.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(Color.white.opacity(0.12), lineWidth: 1)
+        )
+    }
+
+    private var captionBody: Text {
+        let text = presentation.captionText
+        guard presentation.state == .live,
+              let range = text.range(of: "判断依据")
+        else { return Text(text) }
+
+        let before = String(text[..<range.lowerBound])
+        let match = String(text[range])
+        let after = String(text[range.upperBound...])
+        return Text(before)
+            + Text(match).foregroundColor(DeepSpaceTheme.auroraCyan)
+            + Text(after)
+    }
+}
+
+private struct ObserveBottomControls: View {
+    let captionsAction: () -> Void
+    let leaveAction: () -> Void
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            Button(action: captionsAction) {
+                Text("cc")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.75))
+                    .frame(width: 56, height: 56)
+                    .background(Color.white.opacity(0.08))
+                    .clipShape(Circle())
+                    .overlay(Circle().stroke(Color.white.opacity(0.16), lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .observeFrame(x: 52, y: 724, width: 56, height: 56)
+
+            Text("字幕")
+                .font(.system(size: 11, weight: .regular))
+                .foregroundStyle(Color.white.opacity(0.50))
+                .multilineTextAlignment(.center)
+                .observeFrame(x: 40, y: 786, width: 80, height: 13)
+
+            Button(action: leaveAction) {
+                Text("→")
+                    .font(.system(size: 20, weight: .regular))
+                    .foregroundStyle(DeepSpaceTheme.dangerText)
+                    .frame(width: 56, height: 56)
+                    .background(Color(red: 1, green: 89 / 255, blue: 102 / 255).opacity(0.14))
+                    .clipShape(Circle())
+                    .overlay(Circle().stroke(Color(red: 1, green: 115 / 255, blue: 128 / 255).opacity(0.45), lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .observeFrame(x: 282, y: 724, width: 56, height: 56)
+
+            Text("离开")
+                .font(.system(size: 11, weight: .regular))
+                .foregroundStyle(Color.white.opacity(0.50))
+                .multilineTextAlignment(.center)
+                .observeFrame(x: 270, y: 786, width: 80, height: 13)
+        }
+        .frame(width: 390, height: 844)
+    }
+}
+
+struct ObserveInterviewEndedStage: View {
+    let returnHomeAction: () -> Void
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            ObserveStageBackground()
+
+            Text("9:41")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Color.white.opacity(0.80))
+                .observeFrame(x: 30, y: 16, width: 32, height: 18, alignment: .leading)
+
+            ObserveQinglanHalo()
+
+            CompanionAvatarArt(companion: .qinglan, state: .idle)
+                .observeFrame(x: 129, y: 218, width: 132, height: 165)
+
+            Text("本场面试已结束")
+                .font(.system(size: 24, weight: .bold))
+                .foregroundStyle(Color.white.opacity(0.95))
+                .multilineTextAlignment(.center)
+                .observeFrame(x: 0, y: 470, width: 390, height: 34)
+
+            Text("小牛正在生成复盘 · 约 2 分钟")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(DeepSpaceTheme.auroraCyan)
+                .frame(width: 165, height: 28)
+                .background(DeepSpaceTheme.auroraCyan.opacity(0.14))
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(DeepSpaceTheme.auroraCyan.opacity(0.40), lineWidth: 1)
+                )
+                .observeFrame(x: 112.5, y: 520, width: 165, height: 28)
+
+            Button(action: returnHomeAction) {
+                Text("回到首页")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(Color.white.opacity(0.90))
+                    .frame(width: 350, height: 54)
+                    .background(Color.white.opacity(0.07))
+                    .clipShape(RoundedRectangle(cornerRadius: 27, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 27, style: .continuous)
+                            .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                    )
+            }
+            .buttonStyle(.plain)
+            .observeFrame(x: 20, y: 700, width: 350, height: 54)
+        }
+        .frame(width: 390, height: 844)
+        .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+    }
+}
+
+private struct ObserveQinglanHalo: View {
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(DeepSpaceTheme.auroraCyan.opacity(0.08), lineWidth: 1)
+                .frame(width: 242, height: 242)
+                .observeFrame(x: 74, y: 179, width: 242, height: 242)
+
+            Circle()
+                .stroke(DeepSpaceTheme.auroraCyan.opacity(0.12), lineWidth: 1)
+                .frame(width: 198, height: 198)
+                .observeFrame(x: 96, y: 201, width: 198, height: 198)
+
+            Circle()
+                .fill(DeepSpaceTheme.auroraCyan.opacity(0.10))
+                .blur(radius: 40)
+                .observeFrame(x: 101.5, y: 206.5, width: 187, height: 187)
+
+            Circle()
+                .stroke(DeepSpaceTheme.auroraCyan.opacity(0.18), lineWidth: 1)
+                .frame(width: 154, height: 154)
+                .observeFrame(x: 118, y: 223, width: 154, height: 154)
+        }
+        .frame(width: 390, height: 844)
     }
 }
 
@@ -544,5 +1163,18 @@ struct RuntimeDeviceCanvas<Content: View>: View {
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
             .background(Fig.interviewBackground.ignoresSafeArea())
         }
+    }
+}
+
+private extension View {
+    func observeFrame(
+        x: CGFloat,
+        y: CGFloat,
+        width: CGFloat,
+        height: CGFloat,
+        alignment: Alignment = .center
+    ) -> some View {
+        frame(width: width, height: height, alignment: alignment)
+            .position(x: x + width / 2, y: y + height / 2)
     }
 }

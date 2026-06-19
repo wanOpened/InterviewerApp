@@ -50,20 +50,11 @@ struct DesignGalleryRootView: View {
                 ScheduleEditSheetView(kind: .jd, detail: DesignGallerySamples.scheduleDetail, api: GalleryFakeAPI(), dismiss: {}, saved: {})
             }
         case "interview-s1":
-            GalleryInterviewS1()
+            GalleryObserveStage(presentation: DesignGallerySamples.observeConnecting)
         case "interview-s2":
-            GalleryInterviewS2()
+            GalleryObserveStage(presentation: DesignGallerySamples.observeLive)
         case "interview-s3":
-            DoneView(
-                sessionId: "demo",
-                companion: .qinglan,
-                loadResult: {
-                    try await Task.sleep(nanoseconds: 600_000_000_000)
-                    return DesignGallerySamples.report
-                },
-                practiceWeakness: { _ in },
-                returnHome: {}
-            )
+            GalleryObserveEnded()
         default:
             QinglanStatesGallery()
         }
@@ -191,18 +182,44 @@ enum DesignGallerySamples {
         )
     }
 
-    // MARK: 面试进行中（S2，对齐 Figma 633）
-    static var roomS2: InterviewPanelPresentation {
-        InterviewPanelPresentation(
-            connected: true,
-            roomPhase: .inRoom,
-            phase: .live,
-            canEnterRoom: true,
-            microphonePermissionGranted: true,
-            roomSpeaker: .interviewer,
-            participantStatuses: [.lead: .asking, .panelist: .observing, .candidate: .listening],
-            liveCaptionText: "先用一分钟介绍你最近主导的产品，重点说说你当时的判断依据。",
-            questionSetSynced: true
+    // MARK: 观摩面试舞台（第二幕 S1/S2，对齐 Figma 632/633 —— AI 应聘者·听模式，无开口作答）
+    static var observeConnecting: ObserveInterviewStagePresentation {
+        ObserveInterviewStagePresentation(
+            state: .connecting,
+            headerTitle: "字节终面 · Q 1 / 6",
+            connectionLabel: "连接中",
+            isConnected: false,
+            leadStatus: "接入中",
+            leadStatusColor: Fig.onDarkMuted,
+            candidateName: "你",
+            candidateStatus: "待接入",
+            noteDotColor: Fig.amber,
+            captionSpeaker: "主面试官 · 连接中",
+            captionText: "正在接入面试官，正在同步本场题单…",
+            captionHeight: 132,
+            captionFontSize: 17,
+            captionFontWeight: .regular,
+            captionLineSpacing: 6
+        )
+    }
+
+    static var observeLive: ObserveInterviewStagePresentation {
+        ObserveInterviewStagePresentation(
+            state: .live,
+            headerTitle: "字节终面 · Q 2 / 6",
+            connectionLabel: "已连接",
+            isConnected: true,
+            leadStatus: "在提问",
+            leadStatusColor: DeepSpaceTheme.auroraCyan,
+            candidateName: "AI 应聘者",
+            candidateStatus: "待作答",
+            noteDotColor: DeepSpaceTheme.reviewGreen,
+            captionSpeaker: "主面试官 · 提问中",
+            captionText: "先用一分钟介绍你最近主导的产品，重点说说你当时的判断依据。",
+            captionHeight: 188,
+            captionFontSize: 19,
+            captionFontWeight: .medium,
+            captionLineSpacing: 8
         )
     }
 }
@@ -254,34 +271,35 @@ final class GalleryFakeLiveKit: LiveKitControlling {
         onAudioRecoveryFailed: @escaping (String) -> Void
     ) async throws {}
 
+    func activateHomeVoice() async throws {}
     func setMicrophone(enabled: Bool) async throws {}
     func disconnect() async {}
 }
 
-/// S1 接入中：用空操作 fake 构造的真实房间屏（InterviewSession 默认即 .idle/.connecting）。
-private struct GalleryInterviewS1: View {
-    @State private var session = InterviewSession(
-        config: AppConfig.load(),
-        api: GalleryFakeAPI(),
-        liveKit: GalleryFakeLiveKit()
-    )
+/// 观摩面试舞台（第二幕 S1 接入 / S2 进行）：复用生产 `ObserveInterviewStage`，
+/// 深空满铺设备画布，供模拟器逐帧截图对比 Figma 632/633（同源、无信箱边框）。
+private struct GalleryObserveStage: View {
+    let presentation: ObserveInterviewStagePresentation
 
-    var body: some View {
-        InterviewView(session: session, practiceWeakness: { _ in }, returnHome: {})
-    }
-}
-
-/// S2 进行中：复用真实房间舞台 `RoomStageView`，全屏满铺（与生产同源，无信箱边框）。
-private struct GalleryInterviewS2: View {
     var body: some View {
         ZStack(alignment: .top) {
             Color.clear.deepSpaceBackground()
-            VStack(spacing: 0) {
-                RedesignRoomHeader(title: "字节终面", elapsed: "02:14", questionLabel: "Q 2/6", connected: true)
-                    .padding(.top, 8)
-                RoomStageView(presentation: DesignGallerySamples.roomS2)
+            RuntimeDeviceCanvas {
+                ObserveInterviewStage(presentation: presentation, captionsAction: {}, leaveAction: {})
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// 观摩收尾（第二幕 S3）：复用生产 `ObserveInterviewEndedStage`，对齐 Figma 634。
+private struct GalleryObserveEnded: View {
+    var body: some View {
+        ZStack(alignment: .top) {
+            Color.clear.deepSpaceBackground()
+            RuntimeDeviceCanvas {
+                ObserveInterviewEndedStage(returnHomeAction: {})
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

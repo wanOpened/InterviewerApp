@@ -33,6 +33,26 @@ final class APIClientTests: XCTestCase {
         return (client, { captured })
     }
 
+    func test_liveKitJoinTokenPolicyDetectsObserveToken() throws {
+        let token = jwt(payload: #"{"video":{"canPublish":false},"roomConfig":{"metadata":"{\"session_id\":\"s-1\",\"purpose\":\"observe_interview\"}"}}"#)
+
+        let policy = LiveKitJoinTokenPolicy(token: token)
+
+        XCTAssertFalse(policy.canPublish)
+        XCTAssertEqual(policy.purpose, "observe_interview")
+        XCTAssertTrue(policy.isObserveInterview)
+    }
+
+    func test_liveKitJoinTokenPolicyDefaultsToInterviewPublishing() throws {
+        let token = jwt(payload: #"{"video":{"canPublish":true},"roomConfig":{"metadata":"{\"session_id\":\"s-1\"}"}}"#)
+
+        let policy = LiveKitJoinTokenPolicy(token: token)
+
+        XCTAssertTrue(policy.canPublish)
+        XCTAssertNil(policy.purpose)
+        XCTAssertFalse(policy.isObserveInterview)
+    }
+
     func test_createSession_setsHeadersAndBody() async throws {
         let body = #"{"id":"s-1","status":"created","livekit_room":null,"failure_reason":null,"total_cost_usd":null}"#.data(using: .utf8)!
         let (client, lastRequest) = makeClient(201, body)
@@ -344,6 +364,86 @@ final class APIClientTests: XCTestCase {
         XCTAssertEqual(requestBody?["jd_text"] as? String, "负责 AI 搜索产品。")
     }
 
+    func test_requestPhoneCodePostsAuthEndpointWithoutBearerToken() async throws {
+        let body = """
+        {"challenge_id":"challenge-1","expires_in_seconds":300,
+         "resend_after_seconds":60,"dev_code":"123456"}
+        """.data(using: .utf8)!
+        let (client, lastRequest) = makeClient(200, body)
+
+        let response = try await client.requestPhoneCode(phone: "13812345678")
+
+        XCTAssertEqual(response.challengeId, "challenge-1")
+        let req = lastRequest()!
+        XCTAssertEqual(req.url?.path, "/v1/auth/phone/request-code")
+        XCTAssertEqual(req.httpMethod, "POST")
+        XCTAssertNil(req.value(forHTTPHeaderField: "Authorization"))
+        let requestBody = try JSONSerialization.jsonObject(with: req.httpBody!) as? [String: Any]
+        XCTAssertEqual(requestBody?["phone"] as? String, "13812345678")
+    }
+
+    func test_verifyPhoneCodePostsAuthEndpointAndDecodesTokenResponse() async throws {
+        let (client, lastRequest) = makeClient(200, authTokenResponseBody())
+
+        let response = try await client.verifyPhoneCode(
+            challengeId: "challenge-1",
+            phone: "13812345678",
+            code: "123456"
+        )
+
+        XCTAssertEqual(response.accessToken, "access-token")
+        XCTAssertEqual(response.refreshToken, "refresh-token")
+        XCTAssertEqual(response.user.phoneMasked, "138****5678")
+        let req = lastRequest()!
+        XCTAssertEqual(req.url?.path, "/v1/auth/phone/verify")
+        XCTAssertEqual(req.httpMethod, "POST")
+        let requestBody = try JSONSerialization.jsonObject(with: req.httpBody!) as? [String: Any]
+        XCTAssertEqual(requestBody?["challenge_id"] as? String, "challenge-1")
+        XCTAssertEqual(requestBody?["phone"] as? String, "13812345678")
+        XCTAssertEqual(requestBody?["code"] as? String, "123456")
+    }
+
+    func test_authenticatedRequestAddsBearerAuthorizationHeader() async throws {
+        let defaults = UserDefaults(suiteName: "APIClientTests.\(UUID().uuidString)")!
+        let tokenStore = TokenStore(defaults: defaults, now: { Date(timeIntervalSince1970: 100) })
+        tokenStore.save(
+            access: "access-token",
+            refresh: "refresh-token",
+            expiresAt: Date(timeIntervalSince1970: 1_000)
+        )
+        let body = #"{"id":"s-1","status":"created","livekit_room":null,"failure_reason":null,"total_cost_usd":null}"#.data(using: .utf8)!
+        var captured: URLRequest?
+        let client = APIClient(
+            baseURL: URL(string: "http://host:8000")!,
+            userExternalId: "u-1",
+            tokenProvider: tokenStore
+        ) { request in
+            captured = request
+            let resp = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 201,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (body, resp)
+        }
+
+        _ = try await client.createSession(positionRoundId: "pr-1", companion: .qinglan)
+
+        XCTAssertEqual(captured?.value(forHTTPHeaderField: "Authorization"), "Bearer access-token")
+    }
+
+    func test_unauthenticatedRequestKeepsDevUserHeader() async throws {
+        let body = #"{"id":"s-1","status":"created","livekit_room":null,"failure_reason":null,"total_cost_usd":null}"#.data(using: .utf8)!
+        let (client, lastRequest) = makeClient(201, body)
+
+        _ = try await client.createSession(positionRoundId: "pr-1", companion: .qinglan)
+
+        let req = lastRequest()!
+        XCTAssertEqual(req.value(forHTTPHeaderField: "X-User-Id"), "u-1")
+        XCTAssertNil(req.value(forHTTPHeaderField: "Authorization"))
+    }
+
     func test_non2xx_throwsDecodedAPIError() async throws {
         let body = #"{"status":429,"error_code":"RATE_LIMITED","user_message":"慢点","trace_id":"t","retry_after":10,"details":{}}"#.data(using: .utf8)!
         let (client, _) = makeClient(429, body)
@@ -354,5 +454,28 @@ final class APIClientTests: XCTestCase {
             XCTAssertEqual(e.errorCode, "RATE_LIMITED")
             XCTAssertEqual(e.retryAfter, 10)
         }
+    }
+
+    private func authTokenResponseBody() -> Data {
+        """
+        {"token_type":"bearer","access_token":"access-token","refresh_token":"refresh-token",
+         "expires_in_seconds":900,
+         "user":{"id":"user-1","phone_masked":"138****5678",
+         "profile":{"display_name":null,"timezone":"Asia/Shanghai",
+         "preferred_companion":"qinglan","target_summary":null,
+         "weakness_summary":null,"memory_updated_at":null}}}
+        """.data(using: .utf8)!
+    }
+
+    private func jwt(payload: String) -> String {
+        "header.\(base64URL(payload)).signature"
+    }
+
+    private func base64URL(_ value: String) -> String {
+        Data(value.utf8)
+            .base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
     }
 }

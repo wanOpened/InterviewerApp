@@ -3,6 +3,90 @@ import Foundation
 struct DevUserRequest: Encodable { let external_id: String }
 struct DevUserResponse: Decodable { let id: String; let external_id: String }
 
+struct PhoneCodeRequest: Codable, Equatable {
+    let phone: String
+}
+
+struct PhoneCodeResponse: Codable, Equatable {
+    let challengeId: String
+    let expiresInSeconds: Int
+    let resendAfterSeconds: Int
+    let devCode: String?
+
+    enum CodingKeys: String, CodingKey {
+        case challengeId = "challenge_id"
+        case expiresInSeconds = "expires_in_seconds"
+        case resendAfterSeconds = "resend_after_seconds"
+        case devCode = "dev_code"
+    }
+}
+
+struct PhoneVerifyRequest: Codable, Equatable {
+    let challengeId: String
+    let phone: String
+    let code: String
+
+    enum CodingKeys: String, CodingKey {
+        case challengeId = "challenge_id"
+        case phone
+        case code
+    }
+}
+
+struct RefreshTokenRequest: Codable, Equatable {
+    let refreshToken: String
+
+    enum CodingKeys: String, CodingKey {
+        case refreshToken = "refresh_token"
+    }
+}
+
+struct UserProfileRead: Codable, Equatable {
+    let displayName: String?
+    let timezone: String
+    let preferredCompanion: String?
+    let targetSummary: String?
+    let weaknessSummary: String?
+    let memoryUpdatedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case displayName = "display_name"
+        case timezone
+        case preferredCompanion = "preferred_companion"
+        case targetSummary = "target_summary"
+        case weaknessSummary = "weakness_summary"
+        case memoryUpdatedAt = "memory_updated_at"
+    }
+}
+
+struct CurrentUserRead: Codable, Equatable {
+    let id: String
+    let phoneMasked: String?
+    let profile: UserProfileRead
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case phoneMasked = "phone_masked"
+        case profile
+    }
+}
+
+struct AuthTokenResponse: Codable, Equatable {
+    let tokenType: String
+    let accessToken: String
+    let refreshToken: String
+    let expiresInSeconds: Int
+    let user: CurrentUserRead
+
+    enum CodingKeys: String, CodingKey {
+        case tokenType = "token_type"
+        case accessToken = "access_token"
+        case refreshToken = "refresh_token"
+        case expiresInSeconds = "expires_in_seconds"
+        case user
+    }
+}
+
 struct ResumeRead: Decodable {
     let id: String
     let version: Int
@@ -71,6 +155,66 @@ struct SessionRead: Decodable {
 }
 
 struct JoinResponse: Decodable { let livekit_room: String; let livekit_token: String }
+
+struct LiveKitJoinTokenPolicy: Equatable {
+    let canPublish: Bool
+    let purpose: String?
+
+    var isObserveInterview: Bool {
+        purpose == "observe_interview" || !canPublish
+    }
+
+    init(token: String) {
+        guard let payload = Self.decodePayload(from: token) else {
+            canPublish = true
+            purpose = nil
+            return
+        }
+        canPublish = payload.video?.canPublish ?? true
+        purpose = payload.roomConfig?.metadataPurpose
+    }
+
+    private static func decodePayload(from token: String) -> LiveKitTokenPayload? {
+        let parts = token.split(separator: ".")
+        guard parts.count >= 2 else { return nil }
+        let payloadPart = String(parts[1])
+        guard let data = Data(base64URLEncoded: payloadPart) else { return nil }
+        return try? JSONDecoder().decode(LiveKitTokenPayload.self, from: data)
+    }
+}
+
+private struct LiveKitTokenPayload: Decodable, Equatable {
+    struct VideoGrant: Decodable, Equatable {
+        let canPublish: Bool?
+    }
+
+    struct RoomConfig: Decodable, Equatable {
+        let metadata: String?
+
+        var metadataPurpose: String? {
+            guard let metadataData = metadata?.data(using: .utf8),
+                  let object = try? JSONDecoder().decode([String: String].self, from: metadataData)
+            else { return nil }
+            return object["purpose"]
+        }
+    }
+
+    let video: VideoGrant?
+    let roomConfig: RoomConfig?
+}
+
+private extension Data {
+    init?(base64URLEncoded value: String) {
+        var base64 = value
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        let padding = (4 - base64.count % 4) % 4
+        if padding > 0 {
+            base64.append(String(repeating: "=", count: padding))
+        }
+        self.init(base64Encoded: base64)
+    }
+}
 
 struct HomeVoiceJoinResponse: Decodable, Equatable {
     let session_id: String

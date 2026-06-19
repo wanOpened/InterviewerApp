@@ -14,9 +14,11 @@ final class InterviewSessionTests: XCTestCase {
         var createdCompanion: Companion?
         var startedScheduleCompanion: Companion?
         let timeline: Timeline?
-        init(statuses: [String], timeline: Timeline? = nil) {
+        let joinToken: String
+        init(statuses: [String], timeline: Timeline? = nil, joinToken: String = "tok") {
             self.statuses = statuses
             self.timeline = timeline
+            self.joinToken = joinToken
         }
         func ensureUser() async throws {}
         func ensureResume() async throws {}
@@ -33,7 +35,7 @@ final class InterviewSessionTests: XCTestCase {
         }
         func join(sessionId: String) async throws -> JoinResponse {
             joined = true
-            return JoinResponse(livekit_room: "r", livekit_token: "tok")
+            return JoinResponse(livekit_room: "r", livekit_token: joinToken)
         }
         func parseScheduleDraft(rawInput: String, timezone: String) async throws -> ScheduleDraftRead {
             throw TransportError(message: "not used")
@@ -167,6 +169,7 @@ final class InterviewSessionTests: XCTestCase {
                 onAudioRecoveryFailed: onAudioRecoveryFailed
             )
         }
+        func activateHomeVoice() async throws {}
         func disconnect() async {
             timeline?.events.append("room-disconnected")
             connected = false
@@ -252,6 +255,36 @@ final class InterviewSessionTests: XCTestCase {
         XCTAssertTrue(api.joined)
         XCTAssertTrue(lk.connected)
         XCTAssertEqual(session.phase, .live)
+    }
+
+    func test_resumeFromHomeVoiceNavigationWaitsForPreparingObserveSession() async throws {
+        let api = FakeAPI(statuses: ["questions_generating", "ready"])
+        let lk = FakeLK()
+        let session = InterviewSession(config: .default, api: api, liveKit: lk, pollInterval: 0)
+
+        await session.resume(sessionId: "s-1")
+
+        XCTAssertTrue(api.joined)
+        XCTAssertTrue(lk.connected)
+        XCTAssertEqual(session.phase, .live)
+    }
+
+    func test_observePresentationShowsFigmaLiveStateOnceConnectedBeforeQuestionAttributes() async throws {
+        let token = jwt(payload: #"{"video":{"canPublish":false},"roomConfig":{"metadata":"{\"session_id\":\"s-1\",\"purpose\":\"observe_interview\"}"}}"#)
+        let api = FakeAPI(statuses: ["ready"], joinToken: token)
+        let lk = FakeLK()
+        let session = InterviewSession(config: .default, api: api, liveKit: lk, pollInterval: 0)
+
+        await session.resume(sessionId: "s-1")
+        let presentation = ObserveInterviewStagePresentation(session: session)
+
+        XCTAssertEqual(session.roomMode, .observe)
+        XCTAssertEqual(presentation.state, .live)
+        XCTAssertEqual(presentation.connectionLabel, "已连接")
+        XCTAssertEqual(presentation.candidateName, "AI 应聘者")
+        XCTAssertEqual(presentation.candidateStatus, "待作答")
+        XCTAssertEqual(presentation.captionSpeaker, "主面试官 · 提问中")
+        XCTAssertEqual(presentation.captionText, "先用一分钟介绍你最近主导的产品，重点说说你当时的判断依据。")
     }
 
     func test_candidatePauseAndResumeVoiceCommandsToggleMicrophone() async throws {
@@ -699,5 +732,17 @@ final class InterviewSessionTests: XCTestCase {
             if condition() { return }
             try? await Task.sleep(nanoseconds: 10_000_000)
         }
+    }
+
+    private func jwt(payload: String) -> String {
+        "header.\(base64URL(payload)).signature"
+    }
+
+    private func base64URL(_ value: String) -> String {
+        Data(value.utf8)
+            .base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
     }
 }

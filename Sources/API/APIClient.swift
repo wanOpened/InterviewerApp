@@ -25,6 +25,11 @@ protocol APIClienting {
     func startSchedule(id: String, companion: Companion) async throws -> ScheduleStartRead
     func agentHome() async throws -> AgentHomeRead
     func updatePositionJD(positionId: String, jdText: String) async throws -> PositionRead
+    func requestPhoneCode(phone: String) async throws -> PhoneCodeResponse
+    func verifyPhoneCode(challengeId: String, phone: String, code: String) async throws -> AuthTokenResponse
+    func refresh(refreshToken: String) async throws -> AuthTokenResponse
+    func logout() async throws
+    func me() async throws -> CurrentUserRead
 }
 
 extension APIClienting {
@@ -39,6 +44,26 @@ extension APIClienting {
     func scheduleDetail(id: String) async throws -> ScheduleDetailRead {
         throw TransportError(message: "schedule detail is not implemented by this client")
     }
+
+    func requestPhoneCode(phone: String) async throws -> PhoneCodeResponse {
+        throw TransportError(message: "phone code request is not implemented by this client")
+    }
+
+    func verifyPhoneCode(challengeId: String, phone: String, code: String) async throws -> AuthTokenResponse {
+        throw TransportError(message: "phone code verification is not implemented by this client")
+    }
+
+    func refresh(refreshToken: String) async throws -> AuthTokenResponse {
+        throw TransportError(message: "token refresh is not implemented by this client")
+    }
+
+    func logout() async throws {
+        throw TransportError(message: "logout is not implemented by this client")
+    }
+
+    func me() async throws -> CurrentUserRead {
+        throw TransportError(message: "current user is not implemented by this client")
+    }
 }
 
 final class APIClient: APIClienting, AgentHomeSpeechClienting {
@@ -46,11 +71,18 @@ final class APIClient: APIClienting, AgentHomeSpeechClienting {
 
     private let baseURL: URL
     private let userExternalId: String
+    private let tokenProvider: TokenProviding?
     private let transport: Transport
 
-    init(baseURL: URL, userExternalId: String, transport: Transport? = nil) {
+    init(
+        baseURL: URL,
+        userExternalId: String,
+        tokenProvider: TokenProviding? = nil,
+        transport: Transport? = nil
+    ) {
         self.baseURL = baseURL
         self.userExternalId = userExternalId
+        self.tokenProvider = tokenProvider
         self.transport = transport ?? { request in
             let (data, resp) = try await URLSession.shared.data(for: request)
             return (data, resp as! HTTPURLResponse)
@@ -65,6 +97,9 @@ final class APIClient: APIClienting, AgentHomeSpeechClienting {
         var req = URLRequest(url: baseURL.appendingPathComponent(path))
         req.httpMethod = method
         req.setValue(userExternalId, forHTTPHeaderField: "X-User-Id")
+        if let accessToken = tokenProvider?.accessToken {
+            req.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        }
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         for (k, v) in extraHeaders { req.setValue(v, forHTTPHeaderField: k) }
         if let body { req.httpBody = try? JSONEncoder().encode(AnyEncodable(body)) }
@@ -157,6 +192,39 @@ final class APIClient: APIClienting, AgentHomeSpeechClienting {
 
     func joinHomeVoice() async throws -> HomeVoiceJoinResponse {
         try await send(request("POST", "/v1/home-voice/join"), as: HomeVoiceJoinResponse.self)
+    }
+
+    func requestPhoneCode(phone: String) async throws -> PhoneCodeResponse {
+        try await send(
+            request("POST", "/v1/auth/phone/request-code", body: PhoneCodeRequest(phone: phone)),
+            as: PhoneCodeResponse.self
+        )
+    }
+
+    func verifyPhoneCode(challengeId: String, phone: String, code: String) async throws -> AuthTokenResponse {
+        try await send(
+            request(
+                "POST",
+                "/v1/auth/phone/verify",
+                body: PhoneVerifyRequest(challengeId: challengeId, phone: phone, code: code)
+            ),
+            as: AuthTokenResponse.self
+        )
+    }
+
+    func refresh(refreshToken: String) async throws -> AuthTokenResponse {
+        try await send(
+            request("POST", "/v1/auth/refresh", body: RefreshTokenRequest(refreshToken: refreshToken)),
+            as: AuthTokenResponse.self
+        )
+    }
+
+    func logout() async throws {
+        try await sendNoContent(request("POST", "/v1/auth/logout"))
+    }
+
+    func me() async throws -> CurrentUserRead {
+        try await send(request("GET", "/v1/me"), as: CurrentUserRead.self)
     }
 
     func parseScheduleDraft(rawInput: String, timezone: String) async throws -> ScheduleDraftRead {

@@ -69,8 +69,8 @@ final class HomeSchedulePeekModelTests: XCTestCase {
     func test_entryStateShowsNextScheduleWhenUpcomingSchedulesExist() async {
         let api = FakeAPI()
         api.schedules = [
-            .fixture(id: "sch-1", scheduledAt: "2026-06-12T15:00:00+08:00"),
-            .fixture(id: "sch-2", scheduledAt: "2026-06-13T15:00:00+08:00"),
+            .fixture(id: "sch-1", scheduledAt: shanghaiTimestamp(daysFromToday: 1)),
+            .fixture(id: "sch-2", scheduledAt: shanghaiTimestamp(daysFromToday: 2)),
         ]
         let model = HomeSchedulePeekModel(api: api)
 
@@ -154,6 +154,26 @@ final class HomeSchedulePeekModelTests: XCTestCase {
 
         XCTAssertEqual(api.cancelledIDs, ["new"])
         XCTAssertNil(model.creationConfirmation)
+    }
+
+    private func shanghaiTimestamp(daysFromToday days: Int, hour: Int = 15) -> String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Shanghai") ?? .current
+        let day = calendar.date(
+            byAdding: .day,
+            value: days,
+            to: calendar.startOfDay(for: Date())
+        ) ?? Date()
+        let date = calendar.date(
+            bySettingHour: hour,
+            minute: 0,
+            second: 0,
+            of: day
+        ) ?? day
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        formatter.timeZone = calendar.timeZone
+        return formatter.string(from: date)
     }
 }
 

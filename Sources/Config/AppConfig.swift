@@ -70,7 +70,9 @@ struct AppConfig: Codable, Equatable {
     }
 
     static let `default` = AppConfig(
-        host: "192.168.1.9",  // Current Mac LAN IP for real-device testing.
+        host: "192.168.1.14",  // Current Mac LAN IP for real-device testing.
+                             // NOTE: this is a DHCP address and can change — if login/connect
+                             // fails, re-check `ipconfig getifaddr en0` and update here (or in Settings).
                              // For the iOS Simulator instead, set host to 127.0.0.1 in Settings.
         apiPort: 8000,
         livekitPort: 7880,
@@ -83,7 +85,7 @@ struct AppConfig: Codable, Equatable {
     var livekitURL: String { "ws://\(host):\(livekitPort)" }
 
     private static let key = "AppConfig.v1"
-    private static let legacyDefaultHosts: Set<String> = ["10.82.216.155"]
+    private static let legacyDefaultHosts: Set<String> = ["10.82.216.155", "192.168.1.9"]
 
     static func load(defaults: UserDefaults = .standard) -> AppConfig {
         guard let data = defaults.data(forKey: key),

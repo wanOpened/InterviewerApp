@@ -18,6 +18,7 @@ protocol LiveKitControlling: AnyObject {
                           onNavigateHomeAction: @escaping (Data) -> Void,
                           onState: @escaping (_ connected: Bool) -> Void,
                           onAudioRecoveryFailed: @escaping (_ message: String) -> Void) async throws
+    func activateHomeVoice() async throws
     func setMicrophone(enabled: Bool) async throws
     func disconnect() async
     var localIdentity: String { get }
@@ -73,6 +74,7 @@ final class LiveKitController: NSObject, LiveKitControlling, RoomDelegate, @unch
         }
         #endif
         // https://docs.livekit.io/intro/basics/connect.md
+        let tokenPolicy = LiveKitJoinTokenPolicy(token: token)
         try await room.connect(url: url, token: token)
         connected = true
         localIdentity = room.localParticipant.identity?.stringValue ?? ""
@@ -93,11 +95,14 @@ final class LiveKitController: NSObject, LiveKitControlling, RoomDelegate, @unch
             onSegment(reader.info.id, sender, text, isFinal)
         }
 
-        // Publish the microphone. setMicrophone publishes with .microphone source,
-        // which the agent's RoomIO requires (the source=UNKNOWN gotcha).
-        // https://docs.livekit.io/transport/media/publish.md
-        try await room.localParticipant.setMicrophone(enabled: true)
-        microphoneDesired = true
+        // Interview tokens publish the microphone with .microphone source,
+        // which the agent's RoomIO requires. Observe tokens are receive-only.
+        if tokenPolicy.canPublish {
+            try await room.localParticipant.setMicrophone(enabled: true)
+            microphoneDesired = true
+        } else {
+            microphoneDesired = false
+        }
         // Remote (agent) audio plays automatically via LiveKit's AudioManager.
     }
 
@@ -110,20 +115,42 @@ final class LiveKitController: NSObject, LiveKitControlling, RoomDelegate, @unch
         onHomeVoiceSessionEvent = onSessionEvent
         onHomeVoiceNavigateInterview = onNavigateInterview
         onHomeVoiceNavigateHomeAction = onNavigateHomeAction
-        try await connect(
-            url: url,
-            token: token,
-            onSegment: { [weak self] _segmentId, sender, text, isFinal in
-                let speaker: HomeVoiceTranscriptSpeaker = sender == self?.localIdentity ? .user : .agent
-                onSessionEvent(.transcript(text: text, isFinal: isFinal, speaker: speaker))
-            },
-            onParticipantAttributes: { _, _ in },
-            onCaptionChunk: { _, _, _ in },
-            onState: { connected in
-                onSessionEvent(connected ? .connected : .disconnected)
-                onState(connected)
-            },
-            onAudioRecoveryFailed: onAudioRecoveryFailed
+        self.onAudioRecoveryFailed = onAudioRecoveryFailed
+        #if targetEnvironment(simulator)
+        do {
+            try AudioManager.shared.setVoiceProcessingEnabled(false)
+        } catch {
+        }
+        #endif
+        // https://docs.livekit.io/intro/basics/connect.md
+        try await room.connect(url: url, token: token)
+        connected = true
+        localIdentity = room.localParticipant.identity?.stringValue ?? ""
+        onState(true)
+
+        // Home Voice prejoins silently. The mic is enabled only after the user
+        // taps Qinglan and `activateHomeVoice()` notifies the agent.
+        // https://docs.livekit.io/transport/media/publish.md
+        try await room.registerTextStreamHandler(for: "transcript") { [weak self] reader, participantIdentity in
+            let speaker = reader.info.attributes["speaker"] ?? "lead"
+            let isFinal = reader.info.attributes["final"] == "true"
+            var text = ""
+            for try await chunk in reader {
+                text += chunk
+            }
+            let sender = speaker == "candidate"
+                ? self?.localIdentity ?? participantIdentity.stringValue
+                : participantIdentity.stringValue
+            let transcriptSpeaker: HomeVoiceTranscriptSpeaker = sender == self?.localIdentity ? .user : .agent
+            onSessionEvent(.transcript(text: text, isFinal: isFinal, speaker: transcriptSpeaker))
+        }
+    }
+
+    func activateHomeVoice() async throws {
+        // https://docs.livekit.io/transport/data/packets/
+        try await room.localParticipant.publish(
+            data: Data("{}".utf8),
+            options: DataPublishOptions(topic: "home_voice.activate", reliable: true)
         )
     }
 
