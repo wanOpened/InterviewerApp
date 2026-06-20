@@ -1,3 +1,4 @@
+import SwiftUI
 import XCTest
 @testable import InterviewerApp
 
@@ -285,6 +286,33 @@ final class InterviewSessionTests: XCTestCase {
         XCTAssertEqual(presentation.candidateStatus, "待作答")
         XCTAssertEqual(presentation.captionSpeaker, "主面试官 · 提问中")
         XCTAssertEqual(presentation.captionText, "先用一分钟介绍你最近主导的产品，重点说说你当时的判断依据。")
+        // 配色对齐 Figma 633：主面试官在提问=青点+青字；候选人待作答=白0.35点+白0.55字；
+        // 小牛记笔记中=复盘绿点。整页只用青/绿/白透明，无旧 Fig.* 脏色。
+        XCTAssertEqual(presentation.leadStatusDotColor, DeepSpaceTheme.auroraCyan)
+        XCTAssertEqual(presentation.leadStatusTextColor, DeepSpaceTheme.auroraCyan)
+        XCTAssertEqual(presentation.candidateStatusDotColor, Color.white.opacity(0.35))
+        XCTAssertEqual(presentation.candidateStatusTextColor, Color.white.opacity(0.55))
+        XCTAssertEqual(presentation.noteDotColor, DeepSpaceTheme.reviewGreen)
+    }
+
+    func test_observeStageConnectingUsesDeepSpacePaletteNotLegacyFig() {
+        // 病灶回归：接入态曾混用旧 Fig 色板（小牛点 #F09A24 脏橙、muted 文白0.68）。
+        // 对齐 Figma 632：小牛点=琥珀 #FFB45C；主面试官接入中=青点+白0.55字；
+        // 候选人待接入=白0.35点+白0.55字。
+        let session = InterviewSession(
+            config: .default,
+            api: FakeAPI(statuses: ["ready"]),
+            liveKit: FakeLK(),
+            pollInterval: 0
+        )
+        let p = ObserveInterviewStagePresentation(session: session)
+
+        XCTAssertEqual(p.state, .connecting)
+        XCTAssertEqual(p.noteDotColor, DeepSpaceTheme.amber)
+        XCTAssertEqual(p.leadStatusDotColor, DeepSpaceTheme.auroraCyan)
+        XCTAssertEqual(p.leadStatusTextColor, Color.white.opacity(0.55))
+        XCTAssertEqual(p.candidateStatusDotColor, Color.white.opacity(0.35))
+        XCTAssertEqual(p.candidateStatusTextColor, Color.white.opacity(0.55))
     }
 
     func test_interviewPresentationShowsYouAsSameLevelCandidatePeer() async {

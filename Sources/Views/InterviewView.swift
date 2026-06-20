@@ -331,7 +331,8 @@ struct ObserveInterviewStagePresentation: Equatable {
     let connectionLabel: String
     let isConnected: Bool
     let leadStatus: String
-    let leadStatusColor: Color
+    let leadStatusDotColor: Color
+    let leadStatusTextColor: Color
     let candidateName: String
     let candidateStatus: String
     let noteDotColor: Color
@@ -346,7 +347,8 @@ struct ObserveInterviewStagePresentation: Equatable {
     // `candidateNeedsMicrophone` drives an in-card 点亮麦克风 tap (no bottom 开口作答 button).
     let candidateSubtitle: String
     let candidateActive: Bool
-    let candidateStatusColor: Color
+    let candidateStatusDotColor: Color
+    let candidateStatusTextColor: Color
     let candidateNeedsMicrophone: Bool
 
     @MainActor
@@ -362,16 +364,20 @@ struct ObserveInterviewStagePresentation: Equatable {
         connectionLabel = isConnected ? "已连接" : "连接中"
         candidateSubtitle = "3 年 · 产品"
         candidateActive = false
-        candidateStatusColor = Fig.onDarkMuted
+        // 候选人卡（观摩=AI 应聘者）恒为 muted：白0.35 点 + 白0.55 字（Figma 632/633）。
+        candidateStatusDotColor = Color.white.opacity(0.35)
+        candidateStatusTextColor = Color.white.opacity(0.55)
         candidateNeedsMicrophone = false
 
         if connecting {
             state = .connecting
             leadStatus = "接入中"
-            leadStatusColor = Fig.onDarkMuted
+            // 接入态：主面试官点=青（品牌锚点），文字=白0.55（尚未开口）。
+            leadStatusDotColor = DeepSpaceTheme.auroraCyan
+            leadStatusTextColor = Color.white.opacity(0.55)
             candidateName = "你"
             candidateStatus = "待接入"
-            noteDotColor = Fig.amber
+            noteDotColor = DeepSpaceTheme.amber
             captionSpeaker = "主面试官 · 连接中"
             captionText = "正在接入面试官，正在同步本场题单…"
             captionHeight = 132
@@ -381,7 +387,9 @@ struct ObserveInterviewStagePresentation: Equatable {
         } else {
             state = .live
             leadStatus = "在提问"
-            leadStatusColor = DeepSpaceTheme.auroraCyan
+            // 在提问：主面试官点+字皆青（Figma 633）。
+            leadStatusDotColor = DeepSpaceTheme.auroraCyan
+            leadStatusTextColor = DeepSpaceTheme.auroraCyan
             candidateName = "AI 应聘者"
             candidateStatus = "待作答"
             noteDotColor = DeepSpaceTheme.reviewGreen
@@ -417,12 +425,14 @@ struct ObserveInterviewStagePresentation: Equatable {
         if connecting {
             state = .connecting
             leadStatus = "接入中"
-            leadStatusColor = Fig.onDarkMuted
+            leadStatusDotColor = DeepSpaceTheme.auroraCyan
+            leadStatusTextColor = Color.white.opacity(0.55)
             candidateStatus = "待接入"
-            candidateStatusColor = Fig.onDarkMuted
+            candidateStatusDotColor = Color.white.opacity(0.35)
+            candidateStatusTextColor = Color.white.opacity(0.55)
             candidateActive = false
             candidateNeedsMicrophone = false
-            noteDotColor = Fig.amber
+            noteDotColor = DeepSpaceTheme.amber
             captionSpeaker = "主面试官 · 连接中"
             captionText = "正在接入面试官，正在同步本场题单…"
             captionHeight = 132
@@ -432,21 +442,27 @@ struct ObserveInterviewStagePresentation: Equatable {
         } else {
             state = .live
             leadStatus = candidateSpeaking ? "聆听中" : "在提问"
-            leadStatusColor = DeepSpaceTheme.auroraCyan
+            // 主面试官是青色锚点卡，状态点+字皆青（Figma 633）。
+            leadStatusDotColor = DeepSpaceTheme.auroraCyan
+            leadStatusTextColor = DeepSpaceTheme.auroraCyan
             noteDotColor = DeepSpaceTheme.reviewGreen
             if !session.microphonePermissionGranted {
+                // 麦克风未授权（设计稿外的运行态）：用深空琥珀做「待办」提示，非旧脏橙。
                 candidateStatus = "开启麦克风"
-                candidateStatusColor = Fig.amber
+                candidateStatusDotColor = DeepSpaceTheme.amber
+                candidateStatusTextColor = DeepSpaceTheme.amber
                 candidateActive = false
                 candidateNeedsMicrophone = true
             } else if candidateSpeaking {
                 candidateStatus = "作答中"
-                candidateStatusColor = DeepSpaceTheme.auroraCyan
+                candidateStatusDotColor = DeepSpaceTheme.auroraCyan
+                candidateStatusTextColor = DeepSpaceTheme.auroraCyan
                 candidateActive = true
                 candidateNeedsMicrophone = false
             } else {
                 candidateStatus = "聆听中"
-                candidateStatusColor = Fig.onDarkMuted
+                candidateStatusDotColor = Color.white.opacity(0.35)
+                candidateStatusTextColor = Color.white.opacity(0.55)
                 candidateActive = false
                 candidateNeedsMicrophone = false
             }
@@ -470,7 +486,8 @@ struct ObserveInterviewStagePresentation: Equatable {
         connectionLabel: String,
         isConnected: Bool,
         leadStatus: String,
-        leadStatusColor: Color,
+        leadStatusDotColor: Color,
+        leadStatusTextColor: Color,
         candidateName: String,
         candidateStatus: String,
         noteDotColor: Color,
@@ -482,7 +499,8 @@ struct ObserveInterviewStagePresentation: Equatable {
         captionLineSpacing: CGFloat,
         candidateSubtitle: String = "3 年 · 产品",
         candidateActive: Bool = false,
-        candidateStatusColor: Color = Fig.onDarkMuted,
+        candidateStatusDotColor: Color = Color.white.opacity(0.35),
+        candidateStatusTextColor: Color = Color.white.opacity(0.55),
         candidateNeedsMicrophone: Bool = false
     ) {
         self.state = state
@@ -490,7 +508,8 @@ struct ObserveInterviewStagePresentation: Equatable {
         self.connectionLabel = connectionLabel
         self.isConnected = isConnected
         self.leadStatus = leadStatus
-        self.leadStatusColor = leadStatusColor
+        self.leadStatusDotColor = leadStatusDotColor
+        self.leadStatusTextColor = leadStatusTextColor
         self.candidateName = candidateName
         self.candidateStatus = candidateStatus
         self.noteDotColor = noteDotColor
@@ -502,7 +521,8 @@ struct ObserveInterviewStagePresentation: Equatable {
         self.captionLineSpacing = captionLineSpacing
         self.candidateSubtitle = candidateSubtitle
         self.candidateActive = candidateActive
-        self.candidateStatusColor = candidateStatusColor
+        self.candidateStatusDotColor = candidateStatusDotColor
+        self.candidateStatusTextColor = candidateStatusTextColor
         self.candidateNeedsMicrophone = candidateNeedsMicrophone
     }
 }
@@ -529,14 +549,16 @@ struct ObserveInterviewStage: View {
                         name: "主面试官",
                         subtitle: "产品方向",
                         status: presentation.leadStatus,
-                        statusColor: presentation.leadStatusColor,
+                        statusDotColor: presentation.leadStatusDotColor,
+                        statusTextColor: presentation.leadStatusTextColor,
                         highlight: presentation.state == .live ? .speaking : .connecting
                     )
                     ObserveParticipantCard(
                         name: presentation.candidateName,
                         subtitle: presentation.candidateSubtitle,
                         status: presentation.candidateStatus,
-                        statusColor: presentation.candidateStatusColor,
+                        statusDotColor: presentation.candidateStatusDotColor,
+                        statusTextColor: presentation.candidateStatusTextColor,
                         highlight: presentation.candidateActive ? .speaking : .none,
                         tapAction: presentation.candidateNeedsMicrophone ? requestMicrophone : nil
                     )
@@ -638,7 +660,8 @@ private struct ObserveParticipantCard: View {
     let name: String
     let subtitle: String
     let status: String
-    let statusColor: Color
+    let statusDotColor: Color
+    let statusTextColor: Color
     let highlight: Highlight
     var tapAction: (() -> Void)? = nil
 
@@ -670,11 +693,11 @@ private struct ObserveParticipantCard: View {
 
             HStack(spacing: 6) {
                 Circle()
-                    .fill(statusColor)
+                    .fill(statusDotColor)
                     .frame(width: 6, height: 6)
                 Text(status)
                     .font(.system(size: 11, weight: .regular))
-                    .foregroundStyle(statusColor)
+                    .foregroundStyle(statusTextColor)
             }
             .padding(.top, 11)
 
