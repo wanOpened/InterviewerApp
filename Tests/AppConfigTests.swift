@@ -4,7 +4,7 @@ import XCTest
 
 final class AppConfigTests: XCTestCase {
     func test_defaultHostTargetsCurrentMacLANAddress() {
-        XCTAssertEqual(AppConfig.default.host, "192.168.1.9")
+        XCTAssertEqual(AppConfig.default.host, "192.168.1.14")
     }
 
     func test_loadMigratesLegacyHostAndPreservesUserSettings() {
@@ -24,7 +24,7 @@ final class AppConfigTests: XCTestCase {
 
         let loaded = AppConfig.load(defaults: defaults)
 
-        XCTAssertEqual(loaded.host, "192.168.1.9")
+        XCTAssertEqual(loaded.host, AppConfig.default.host)
         XCTAssertEqual(loaded.apiPort, 9000)
         XCTAssertEqual(loaded.livekitPort, 7999)
         XCTAssertEqual(loaded.devUserExternalId, "apple:preserved-user")
