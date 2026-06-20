@@ -226,15 +226,17 @@ private struct RedesignInterviewRoomScreen: View {
             } else if session.roomMode == .observe {
                 ObserveInterviewStage(
                     presentation: ObserveInterviewStagePresentation(session: session),
-                    captionsAction: {},
-                    leaveAction: observeLeave
+                    captionsAction: session.toggleCaptions,
+                    leaveAction: observeLeave,
+                    captionsVisible: session.captionsVisible
                 )
             } else {
                 ObserveInterviewStage(
                     presentation: ObserveInterviewStagePresentation(interviewSession: session),
-                    captionsAction: {},
+                    captionsAction: session.toggleCaptions,
                     leaveAction: interviewLeave,
-                    requestMicrophone: session.openMicrophoneSettings
+                    requestMicrophone: session.openMicrophoneSettings,
+                    captionsVisible: session.captionsVisible
                 )
                 .onAppear { session.refreshMicrophonePermission() }
             }
@@ -510,6 +512,7 @@ struct ObserveInterviewStage: View {
     let captionsAction: () -> Void
     let leaveAction: () -> Void
     var requestMicrophone: (() -> Void)? = nil
+    var captionsVisible: Bool = true
 
     var body: some View {
         ZStack {
@@ -543,12 +546,15 @@ struct ObserveInterviewStage: View {
                 ObserveAssistantRow(dotColor: presentation.noteDotColor)
                     .padding(.top, 16)
 
-                ObserveCaptionCard(presentation: presentation)
-                    .padding(.top, 20)
+                if captionsVisible {
+                    ObserveCaptionCard(presentation: presentation)
+                        .padding(.top, 20)
+                }
 
                 Spacer(minLength: 20)
 
                 ObserveBottomControls(
+                    captionsOn: captionsVisible,
                     captionsAction: captionsAction,
                     leaveAction: leaveAction
                 )
@@ -852,6 +858,7 @@ private struct ObserveCaptionCard: View {
 }
 
 private struct ObserveBottomControls: View {
+    var captionsOn: Bool = true
     let captionsAction: () -> Void
     let leaveAction: () -> Void
 
@@ -862,11 +869,11 @@ private struct ObserveBottomControls: View {
             controlItem(label: "字幕", action: captionsAction) {
                 Text("cc")
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(Color.white.opacity(0.75))
+                    .foregroundStyle(Color.white.opacity(captionsOn ? 0.75 : 0.35))
                     .frame(width: 56, height: 56)
-                    .background(Color.white.opacity(0.08))
+                    .background(Color.white.opacity(captionsOn ? 0.08 : 0.04))
                     .clipShape(Circle())
-                    .overlay(Circle().stroke(Color.white.opacity(0.16), lineWidth: 1))
+                    .overlay(Circle().stroke(Color.white.opacity(captionsOn ? 0.16 : 0.10), lineWidth: 1))
             }
 
             Spacer(minLength: 0)

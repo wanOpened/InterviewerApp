@@ -340,6 +340,23 @@ final class InterviewSessionTests: XCTestCase {
         XCTAssertTrue(p.candidateNeedsMicrophone)
     }
 
+    func test_toggleCaptionsFlipsVisibilityDefaultOn() async {
+        // cc = closed captions：默认开（字幕卡常显），点击 cc 在显/隐之间切换。
+        let session = InterviewSession(
+            config: .default,
+            api: FakeAPI(statuses: ["ready"]),
+            liveKit: FakeLK(),
+            pollInterval: 0
+        )
+        XCTAssertTrue(session.captionsVisible)
+
+        session.toggleCaptions()
+        XCTAssertFalse(session.captionsVisible)
+
+        session.toggleCaptions()
+        XCTAssertTrue(session.captionsVisible)
+    }
+
     func test_candidatePauseAndResumeVoiceCommandsToggleMicrophone() async throws {
         let api = FakeAPI(statuses: ["ready"])
         let lk = FakeLK()

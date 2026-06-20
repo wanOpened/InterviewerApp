@@ -34,6 +34,7 @@ final class InterviewSession {
     private(set) var turns: [TranscriptTurn] = []
     private(set) var connected = false
     private(set) var isPaused = false
+    private(set) var captionsVisible = true
     private(set) var connectionStatus: ConnectionStatus = .idle
     private(set) var roomMode: RoomMode = .interview
     private(set) var roomPhase: RoomPhase = .connecting
@@ -335,6 +336,12 @@ final class InterviewSession {
         } catch {
             phase = .failed("\(error)")
         }
+    }
+
+    /// 底部「字幕(cc)」开关：真实控制实时字幕卡的显隐（closed captions），
+    /// 纯客户端 UI 状态，不触达后端/LiveKit。
+    func toggleCaptions() {
+        captionsVisible.toggle()
     }
 
     func end() async {
