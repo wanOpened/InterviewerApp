@@ -287,6 +287,59 @@ final class InterviewSessionTests: XCTestCase {
         XCTAssertEqual(presentation.captionText, "先用一分钟介绍你最近主导的产品，重点说说你当时的判断依据。")
     }
 
+    func test_interviewPresentationShowsYouAsSameLevelCandidatePeer() async {
+        // 正式面试复用 第二幕·面试舞台（Figma 633）：候选人是「你 · 候选人」同级 peer 卡，
+        // 与观摩的「AI 应聘者」卡对称——不是底部一条「开口作答」横条。
+        let lk = FakeLK()
+        let session = InterviewSession(
+            config: .default,
+            api: FakeAPI(statuses: ["ready"]),
+            liveKit: lk,
+            microphonePermission: FakeMicrophonePermission(status: .allowed),
+            pollInterval: 0
+        )
+        await session.start(positionRoundId: "pr-1")
+
+        lk.emitAttributes([
+            "role": "lead", "status": "asking",
+            "question_index": "1", "question_total": "6", "phase": "in_room",
+        ])
+        await waitUntil { session.roomPhase == .inRoom }
+
+        let p = ObserveInterviewStagePresentation(interviewSession: session)
+        XCTAssertEqual(session.roomMode, .interview)
+        XCTAssertEqual(p.state, .live)
+        XCTAssertEqual(p.candidateName, "你")
+        XCTAssertEqual(p.candidateSubtitle, "候选人")
+        XCTAssertEqual(p.candidateStatus, "聆听中")
+        XCTAssertFalse(p.candidateNeedsMicrophone)
+        XCTAssertEqual(p.captionSpeaker, "主面试官 · 提问中")
+    }
+
+    func test_interviewPresentationCandidateCardPromptsMicrophoneWhenDenied() async {
+        // 麦克风未授权：候选人卡显示「开启麦克风」并可点击调起系统设置（无底部按钮）。
+        let lk = FakeLK()
+        let session = InterviewSession(
+            config: .default,
+            api: FakeAPI(statuses: ["ready"]),
+            liveKit: lk,
+            microphonePermission: FakeMicrophonePermission(status: .denied),
+            pollInterval: 0
+        )
+        await session.start(positionRoundId: "pr-1")
+
+        lk.emitAttributes([
+            "role": "lead", "status": "asking",
+            "question_index": "1", "question_total": "6", "phase": "in_room",
+        ])
+        await waitUntil { session.roomPhase == .inRoom }
+
+        let p = ObserveInterviewStagePresentation(interviewSession: session)
+        XCTAssertEqual(p.candidateName, "你")
+        XCTAssertEqual(p.candidateStatus, "开启麦克风")
+        XCTAssertTrue(p.candidateNeedsMicrophone)
+    }
+
     func test_candidatePauseAndResumeVoiceCommandsToggleMicrophone() async throws {
         let api = FakeAPI(statuses: ["ready"])
         let lk = FakeLK()
